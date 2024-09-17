@@ -1,7 +1,7 @@
  # Morse-Code-Interface-Unity
 A simple Morse code typer interface in Unity
 
-di-di di-dah-dah-di 💃 dah-dah-dah di-di-di-dah di 👯
+di-di di-dah-dah-di 💃 dah-dah-dah di-di-di-dah di 👯  (has sound effect 🔊) (works with any key / mouse input, you can adjust the long-press detection duration to your liking )
 ![morse-hi](https://github.com/in-c0/morse-code-game/assets/154449115/b5238b98-de5b-40ff-96e3-5a5a9cf26985)
 
  # License
