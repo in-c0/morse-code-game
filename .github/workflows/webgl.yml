@@ -1,0 +1,81 @@
+# Builds the Unity project for WebGL with GameCI.
+# - Every PR / push to main: build only (artifact downloadable from the run).
+# - Deploy to GitHub Pages: manual only (Actions → "WebGL" → Run workflow on main, tick "deploy").
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   UNITY_LICENSE  – full contents of your Unity Personal license file (Unity_lic.ulf)
+#   UNITY_EMAIL    – Unity account email
+#   UNITY_PASSWORD – Unity account password
+# Without UNITY_LICENSE the build steps are skipped (the run still passes).
+
+name: WebGL
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy this build to GitHub Pages"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webgl-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      HAS_LICENSE: ${{ secrets.UNITY_LICENSE != '' }}
+    steps:
+      - name: Check Unity license secret
+        if: env.HAS_LICENSE != 'true'
+        run: echo "::warning::UNITY_LICENSE secret is not set — skipping WebGL build."
+
+      - uses: actions/checkout@v4
+        if: env.HAS_LICENSE == 'true'
+        with:
+          lfs: true
+
+      - uses: actions/cache@v4
+        if: env.HAS_LICENSE == 'true'
+        with:
+          path: Library
+          key: Library-WebGL-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: Library-WebGL-
+
+      - uses: game-ci/unity-builder@v4
+        if: env.HAS_LICENSE == 'true'
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          targetPlatform: WebGL
+          buildName: morse-code-typer
+
+      # Pages serves the folder that contains index.html.
+      - uses: actions/upload-pages-artifact@v3
+        if: env.HAS_LICENSE == 'true'
+        with:
+          path: build/WebGL/morse-code-typer
+
+  deploy:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
