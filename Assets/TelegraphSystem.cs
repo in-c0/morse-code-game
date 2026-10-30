@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
 
@@ -20,7 +19,7 @@ public class TelegraphSystem : MonoBehaviour
 	private bool sentenceFinished = false;
 	private Coroutine endOfInputCoroutine;
 	private float endOfInputDelay = 1f;
-	private List<GameObject> morseCodeObjects = new List<GameObject>();
+	private float wordGapDelay = 1.5f; // extra pause after a letter that inserts a space
 	private string decodedString = "";
 
 	private const string ConfirmedColor = "#004d00"; // dark green: letters already committed
@@ -81,8 +80,17 @@ public class TelegraphSystem : MonoBehaviour
 	IEnumerator EndOfInputSequence()
 	{
 		yield return new WaitForSeconds(endOfInputDelay);
-		endOfInputCoroutine = null;
 		DecodeMorseCode();
+
+		// Keep pausing and the word ends: add a space automatically.
+		yield return new WaitForSeconds(wordGapDelay);
+		endOfInputCoroutine = null;
+		if (!sentenceFinished && decodedString.Length > 0 && !decodedString.EndsWith(" "))
+		{
+			decodedString += " ";
+			feedbackText.text = "spacebar";
+			UpdateCollectionText();
+		}
 	}
 
 	private void StopEndOfInputTimer()
@@ -119,7 +127,6 @@ public class TelegraphSystem : MonoBehaviour
 		{
 			decodedString += decodedLetter;
 			feedbackText.text = decodedLetter == " " ? "spacebar" : decodedLetter;
-			ClearMorseCodeObjects();
 		}
 
 		UpdateCollectionText();
@@ -178,21 +185,11 @@ public class TelegraphSystem : MonoBehaviour
 		currentMorseCode = "";
 		liveMorseCodeText.text = "";
 		sentenceFinished = false;
-		ClearMorseCodeObjects();
 
 		yield return new WaitForSeconds(3f);
 
 		collectionText.text = "";
 		inputLocked = false;
-	}
-
-	private void ClearMorseCodeObjects()
-	{
-		foreach (var morseObj in morseCodeObjects)
-		{
-			Destroy(morseObj);
-		}
-		morseCodeObjects.Clear();
 	}
 
 	// Called when the full stop (.-.-.-) is typed: the finished sentence stays on screen
@@ -208,7 +205,6 @@ public class TelegraphSystem : MonoBehaviour
 		liveMorseCodeText.text = "";
 		currentMorseCode = "";
 		feedbackText.text = "";
-		ClearMorseCodeObjects();
 		sentenceFinished = true;
 	}
 
@@ -250,7 +246,32 @@ public class TelegraphSystem : MonoBehaviour
 			case "-.--": return "Y";
 			case "--..": return "Z";
 
+			case ".----": return "1";
+			case "..---": return "2";
+			case "...--": return "3";
+			case "....-": return "4";
+			case ".....": return "5";
+			case "-....": return "6";
+			case "--...": return "7";
+			case "---..": return "8";
+			case "----.": return "9";
+			case "-----": return "0";
+
 			case "-.-.--": return "!";
+			case "..--..": return "?";
+			case "--..--": return ",";
+			case ".----.": return "'";
+			case ".-..-.": return "\"";
+			case "-..-.": return "/";
+			case "-.--.": return "(";
+			case "-.--.-": return ")";
+			case "---...": return ":";
+			case "-.-.-.": return ";";
+			case "-...-": return "=";
+			case ".-.-.": return "+";
+			case "-....-": return "-";
+			case "..--.-": return "_";
+			case ".--.-.": return "@";
 			case ".......": return " ";
 
 			case "...-.-.-...":

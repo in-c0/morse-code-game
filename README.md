@@ -1,14 +1,24 @@
- # Morse-Code-Interface-Unity
-A simple Morse code typer interface in Unity
+ # Morse Code Typer
+A simple Morse code typer in Unity — any key or mouse button is your telegraph key. 🔊
 
-di-di di-dah-dah-di 💃 dah-dah-dah di-di-di-dah di 👯  (has sound effect 🔊) (works with any key / mouse input) 
-
-
-It is based on International Morse code. You can adjust the long-press detection duration to your liking, it's a bit of a challenge to find the perfect speed but you will eventually find it if you can type fast enough.
-
-Type a period (.-.-.-) to finish a sentence — it stays on screen until your next key press.
+**▶ [Play in your browser](https://in-c0.github.io/morse-code-game/)**
 
 ![morse-hi](https://github.com/in-c0/morse-code-game/assets/154449115/b5238b98-de5b-40ff-96e3-5a5a9cf26985)
+
+## How to play
+| Do this | Result |
+|---|---|
+| Tap a key | dot `.` |
+| Hold a key | dash `-` |
+| Pause ~1 s | letter is committed |
+| Keep pausing | space between words |
+| `.-.-.-` | full stop — finishes the sentence |
+| `........` (8 dots) | start over |
+
+Supports International Morse code: A–Z, 0–9 and common punctuation (`! ? , ' " / ( ) : ; = + - _ @`).
+The dot/dash threshold is adjustable with the slider — finding your speed is part of the challenge.
+
+Building it yourself: Unity 2022.3.17f1. WebGL builds run in CI (`.github/workflows/webgl.yml`).
 
  # License
 MIT License
