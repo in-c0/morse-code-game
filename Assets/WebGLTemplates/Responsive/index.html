@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes">
+    <meta name="theme-color" content="#121513">
+    <title>{{{ PRODUCT_NAME }}}</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #121513; }
+      #unity-canvas {
+        display: block; width: 100vw; height: 100vh; height: 100dvh; background: #121513;
+        outline: none;
+        /* Long-press is the dash: stop the browser's own long-press behaviour. */
+        touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+      #bar { width: min(320px, 60vw); height: 4px; background: #2c342f; border-radius: 2px; overflow: hidden; }
+      #fill { width: 0; height: 100%; background: #7cffb2; }
+    </style>
+  </head>
+  <body>
+    <canvas id="unity-canvas" tabindex="-1"></canvas>
+    <div id="loading"><div id="bar"><div id="fill"></div></div></div>
+    <script src="Build/{{{ LOADER_FILENAME }}}"></script>
+    <script>
+      var canvas = document.querySelector("#unity-canvas");
+      canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+      var config = {
+        dataUrl: "Build/{{{ DATA_FILENAME }}}",
+        frameworkUrl: "Build/{{{ FRAMEWORK_FILENAME }}}",
+#if USE_THREADS
+        workerUrl: "Build/{{{ WORKER_FILENAME }}}",
+#endif
+#if USE_WASM
+        codeUrl: "Build/{{{ CODE_FILENAME }}}",
+#endif
+#if MEMORY_FILENAME
+        memoryUrl: "Build/{{{ MEMORY_FILENAME }}}",
+#endif
+#if SYMBOLS_FILENAME
+        symbolsUrl: "Build/{{{ SYMBOLS_FILENAME }}}",
+#endif
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: {{{ JSON.stringify(COMPANY_NAME) }}},
+        productName: {{{ JSON.stringify(PRODUCT_NAME) }}},
+        productVersion: {{{ JSON.stringify(PRODUCT_VERSION) }}},
+      };
+
+      createUnityInstance(canvas, config, function (progress) {
+        document.querySelector("#fill").style.width = 100 * progress + "%";
+      }).then(function () {
+        document.querySelector("#loading").remove();
+        canvas.focus();
+      }).catch(function (message) {
+        alert(message);
+      });
+    </script>
+  </body>
+</html>
