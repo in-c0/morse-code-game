@@ -20,6 +20,7 @@ public class TelegraphSystem : MonoBehaviour
 	private bool isKeyDown = false;
 	private bool inputLocked = false;
 	private bool needRelease = false;
+	private float needReleaseSince;
 	private bool mouseStartedOnControl = false;
 	private bool sentenceFinished = false;
 	private Coroutine endOfInputCoroutine;
@@ -72,14 +73,15 @@ public class TelegraphSystem : MonoBehaviour
 		if (inputLocked || BlockInput)
 		{
 			CancelPress();
-			needRelease = true;
+			RequireRelease();
 			return;
 		}
 
 		// After a block ends, wait until everything is released before accepting a new press.
+		// The timeout covers a key-up the browser never delivered (e.g. focus lost mid-press).
 		if (needRelease)
 		{
-			if (pressed) return;
+			if (pressed && Time.unscaledTime - needReleaseSince < 1.5f) return;
 			needRelease = false;
 		}
 
@@ -120,6 +122,45 @@ public class TelegraphSystem : MonoBehaviour
 		}
 	}
 
+	private void RequireRelease()
+	{
+		needReleaseSince = Time.unscaledTime; // counts from the last blocked frame / focus loss
+		needRelease = true;
+	}
+
+	void OnApplicationFocus(bool focused)
+	{
+		if (!focused)
+		{
+			CancelPress();
+			RequireRelease();
+		}
+	}
+
+	private static KeyCode[] keyboardKeys;
+
+	// Input.anyKey also counts mouse buttons; when a mouse button is held, check the keyboard on its own.
+	private static bool AnyKeyboardKeyHeld()
+	{
+		if (keyboardKeys == null)
+		{
+			var keys = new List<KeyCode>();
+			foreach (KeyCode k in Enum.GetValues(typeof(KeyCode)))
+			{
+				if (k == KeyCode.None || k == KeyCode.Escape) continue;
+				if (k >= KeyCode.Mouse0 && k <= KeyCode.Mouse6) continue;
+				if (k >= KeyCode.JoystickButton0) continue;
+				keys.Add(k);
+			}
+			keyboardKeys = keys.ToArray();
+		}
+		foreach (var k in keyboardKeys)
+		{
+			if (Input.GetKey(k)) return true;
+		}
+		return false;
+	}
+
 	private bool ReadPressed()
 	{
 		bool mouseHeld = Input.GetMouseButton(0) || Input.GetMouseButton(1) || Input.GetMouseButton(2);
@@ -129,7 +170,7 @@ public class TelegraphSystem : MonoBehaviour
 		}
 
 		bool mouse = mouseHeld && !mouseStartedOnControl;
-		bool keyboard = Input.anyKey && !mouseHeld && !Input.GetKey(KeyCode.Escape);
+		bool keyboard = Input.anyKey && !Input.GetKey(KeyCode.Escape) && (!mouseHeld || AnyKeyboardKeyHeld());
 		bool extra = ExtraPressed != null && ExtraPressed();
 		return keyboard || mouse || extra;
 	}
