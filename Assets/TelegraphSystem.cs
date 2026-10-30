@@ -16,14 +16,17 @@ public class TelegraphSystem : MonoBehaviour
 	private float keyDownTime;
 	private string currentMorseCode = "";
 	private bool isKeyDown = false;
+	private bool inputLocked = false;
+	private bool sentenceFinished = false;
 	private Coroutine endOfInputCoroutine;
-	private Coroutine fadeCoroutine;
 	private float endOfInputDelay = 1f;
-	private float fadeDelay = 2f;
-	private float fadeDuration = 5f;
 	private List<GameObject> morseCodeObjects = new List<GameObject>();
 	private string decodedString = "";
-	private bool fullStopUsed = false;
+
+	private const string ConfirmedColor = "#004d00"; // dark green: letters already committed
+	private const string EditingColor = "#00ff00";   // bright green: letter being typed
+	private const string FinishedColor = "#00ff00";  // finished sentence stays on screen
+	private const string ErrorColor = "#FF0000";
 
 	public Slider thresholdSlider; // Reference to the slider controlling the long press threshold
 
@@ -34,6 +37,12 @@ public class TelegraphSystem : MonoBehaviour
 			// Dynamically update longPressThreshold based on the slider's value
 			longPressThreshold = Mathf.Lerp(0.1f, 0.5f, (thresholdSlider.value - 0.5f) / (3f - 0.5f));
 		}
+
+		if (inputLocked)
+		{
+			return;
+		}
+
 		if (Input.anyKey)
 		{
 			if (!isKeyDown)
@@ -41,8 +50,15 @@ public class TelegraphSystem : MonoBehaviour
 				isKeyDown = true;
 				keyDownTime = Time.time;
 				beepSound.Play();
-				feedbackText.text = "loading ...";
-				ResetFadeEffect();
+
+				// A new key press after a full stop starts a new sentence.
+				if (sentenceFinished)
+				{
+					BeginNewSentence();
+				}
+
+				feedbackText.text = "";
+				StopEndOfInputTimer();
 			}
 		}
 		else if (isKeyDown)
@@ -52,41 +68,66 @@ public class TelegraphSystem : MonoBehaviour
 			float keyPressDuration = Time.time - keyDownTime;
 			currentMorseCode += keyPressDuration <= longPressThreshold ? "." : "-";
 
-			if(!fullStopUsed)
-				StartFadeEffect();
-	
 			UpdateLiveMorseCodeDisplay();
+
+			// Commit the letter once the key has been released for endOfInputDelay.
+			if (!sentenceFinished && !inputLocked)
+			{
+				endOfInputCoroutine = StartCoroutine(EndOfInputSequence());
+			}
 		}
 	}
 
 	IEnumerator EndOfInputSequence()
 	{
 		yield return new WaitForSeconds(endOfInputDelay);
+		endOfInputCoroutine = null;
 		DecodeMorseCode();
-		currentMorseCode = "";
-		liveMorseCodeText.text = "";
-		StartFadeEffect();
+	}
+
+	private void StopEndOfInputTimer()
+	{
+		if (endOfInputCoroutine != null)
+		{
+			StopCoroutine(endOfInputCoroutine);
+			endOfInputCoroutine = null;
+		}
 	}
 
 	private void DecodeMorseCode()
 	{
-		string decodedLetter = MorseCodeToLetter(currentMorseCode);
-		if (!string.IsNullOrEmpty(decodedLetter) && (decodedLetter != "[?]"  || decodedLetter != "STAROVER"))
+		if (string.IsNullOrEmpty(currentMorseCode))
 		{
-			decodedString += decodedLetter;
-			UpdateCollectionText(decodedString);
-			feedbackText.text = decodedLetter == " " ? "spacebar" : $"{decodedLetter}";
-			ClearMorseCodeObjects();
+			return;
+		}
+
+		string decodedLetter = MorseCodeToLetter(currentMorseCode);
+		currentMorseCode = "";
+		liveMorseCodeText.text = "";
+
+		if (decodedLetter == "[?]")
+		{
+			// Unknown code: show an error but keep the sentence typed so far.
+			feedbackText.text = $"<color={ErrorColor}>?</color>";
+		}
+		else if (decodedLetter == "WAIT")
+		{
+			// Prosign: acknowledged, but not added to the sentence.
+			feedbackText.text = "WAIT";
 		}
 		else
 		{
-			feedbackText.text = "<color=#FF0000>" + "?" + "</color>";
+			decodedString += decodedLetter;
+			feedbackText.text = decodedLetter == " " ? "spacebar" : decodedLetter;
+			ClearMorseCodeObjects();
 		}
+
+		UpdateCollectionText();
 	}
 
-	private void UpdateCollectionText(string text)
+	private void UpdateCollectionText()
 	{
-		collectionText.text = "<color=#004d00>" + text + "</color>"; // Dark green color for confirmed text
+		collectionText.text = $"<color={ConfirmedColor}>{decodedString}</color>";
 	}
 
 	private void UpdateLiveMorseCodeDisplay()
@@ -94,54 +135,57 @@ public class TelegraphSystem : MonoBehaviour
 		liveMorseCodeText.text = currentMorseCode;
 
 		string liveLetter = MorseCodeToLetter(currentMorseCode);
-		if (liveLetter == "[?]")
-		{
-			liveLetter = "<color=#FF0000>" + "?" + "</color>";
-		}
-
-		collectionText.text = "<color=#004d00>" + decodedString + "</color>"; // Dark green color for confirmed text
-		collectionText.text += "<color=#00ff00>" + liveLetter + "</color>"; // Green color for the current editing letter
 
 		if (liveLetter == "STARTOVER")
 		{
 			StartCoroutine(StartOverMorseCode());
-		} else if(liveLetter == ".")
-		{
-			// TODO: DISABLE INPUT
-			fullStopUsed = true;
-			CompleteSentence();
+			return;
 		}
+
+		if (liveLetter == ".")
+		{
+			CompleteSentence();
+			return;
+		}
+
+		string shownLetter;
+		if (liveLetter == "[?]")
+		{
+			shownLetter = $"<color={ErrorColor}>?</color>";
+		}
+		else if (liveLetter == "WAIT")
+		{
+			shownLetter = "";
+		}
+		else
+		{
+			shownLetter = $"<color={EditingColor}>{liveLetter}</color>";
+		}
+
+		collectionText.text = $"<color={ConfirmedColor}>{decodedString}</color>" + shownLetter;
 	}
+
 	IEnumerator StartOverMorseCode()
 	{
-		if (fadeCoroutine != null)
-		{
-			StopCoroutine(fadeCoroutine);
-		}
+		StopEndOfInputTimer();
+		inputLocked = true;
+		beepSound.Stop();
+		isKeyDown = false;
 
-		if (endOfInputCoroutine != null)
-		{
-			StopCoroutine(endOfInputCoroutine);
-		}
-
-		// To-do: Disable Input while starting over
 		collectionText.text = "ERROR. START OVER";
 		decodedString = "";
 		feedbackText.text = "";
 		currentMorseCode = "";
 		liveMorseCodeText.text = "";
+		sentenceFinished = false;
 		ClearMorseCodeObjects();
 
 		yield return new WaitForSeconds(3f);
-		decodedString = "";
-		collectionText.text = "";
-		currentMorseCode = "";
-		feedbackText.text = "";
-		liveMorseCodeText.text = "";
-		ClearMorseCodeObjects();
 
-		// To-do: Re-enable Input aFter starting over
+		collectionText.text = "";
+		inputLocked = false;
 	}
+
 	private void ClearMorseCodeObjects()
 	{
 		foreach (var morseObj in morseCodeObjects)
@@ -151,67 +195,28 @@ public class TelegraphSystem : MonoBehaviour
 		morseCodeObjects.Clear();
 	}
 
-	private void StartFadeEffect()
-	{
-		if (fadeCoroutine != null)
-		{
-			StopCoroutine(fadeCoroutine);
-		}
-		fadeCoroutine = StartCoroutine(FadeCollectionText());
-	}
-
-	IEnumerator FadeCollectionText()
-	{
-		yield return new WaitForSeconds(fadeDelay);
-
-		float elapsedTime = 0;
-		while (elapsedTime < fadeDuration)
-		{
-			elapsedTime += Time.deltaTime;
-			float alpha = Mathf.Lerp(1f, 0f, elapsedTime / fadeDuration);
-			SetTextOpacity(collectionText, alpha);
-			yield return null;
-		}
-
-		CompleteSentence();
-	}
-
+	// Called when the full stop (.-.-.-) is typed: the finished sentence stays on screen
+	// until the next key press starts a new one.
 	private void CompleteSentence()
 	{
-		if(endOfInputCoroutine != null) StopCoroutine(endOfInputCoroutine);
-		if (fadeCoroutine != null) StopCoroutine(fadeCoroutine);
+		StopEndOfInputTimer();
 
-		Debug.Log(collectionText.text);
+		decodedString += ".";
+		Debug.Log(decodedString);
 
-		decodedString = "";
-		collectionText.text = "";
+		collectionText.text = $"<color={FinishedColor}>{decodedString}</color>";
 		liveMorseCodeText.text = "";
 		currentMorseCode = "";
 		feedbackText.text = "";
-		SetTextOpacity(collectionText, 1f);
 		ClearMorseCodeObjects();
-		fullStopUsed = false;
+		sentenceFinished = true;
 	}
 
-	private void ResetFadeEffect()
+	private void BeginNewSentence()
 	{
-		if (fadeCoroutine != null)
-		{
-			StopCoroutine(fadeCoroutine);
-			SetTextOpacity(collectionText, 1f);
-		}
-		if (endOfInputCoroutine != null)
-		{
-			StopCoroutine(endOfInputCoroutine);
-		}
-		endOfInputCoroutine = StartCoroutine(EndOfInputSequence());
-	}
-
-	private void SetTextOpacity(TextMeshProUGUI text, float opacity)
-	{
-		Color color = text.color;
-		color.a = opacity;
-		text.color = color;
+		decodedString = "";
+		collectionText.text = "";
+		sentenceFinished = false;
 	}
 
 	private string MorseCodeToLetter(string morseCode)
