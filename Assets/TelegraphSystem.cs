@@ -1,4 +1,6 @@
+using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
 
@@ -13,21 +15,43 @@ public class TelegraphSystem : MonoBehaviour
 	public GameObject morseCodePrefab;
 	public float longPressThreshold = 0.2f;
 	private float keyDownTime;
+	private float lastPressDuration;
 	private string currentMorseCode = "";
 	private bool isKeyDown = false;
 	private bool inputLocked = false;
+	private bool needRelease = false;
+	private bool mouseStartedOnControl = false;
 	private bool sentenceFinished = false;
 	private Coroutine endOfInputCoroutine;
 	private float endOfInputDelay = 1f;
 	private float wordGapDelay = 1.5f; // extra pause after a letter that inserts a space
 	private string decodedString = "";
 
-	private const string ConfirmedColor = "#004d00"; // dark green: letters already committed
-	private const string EditingColor = "#00ff00";   // bright green: letter being typed
-	private const string FinishedColor = "#00ff00";  // finished sentence stays on screen
-	private const string ErrorColor = "#FF0000";
+	// Text colours (rich-text tags), tuned for a dark background.
+	public static string ConfirmedColor = "#D9E0DB"; // letters already committed
+	public static string EditingColor = "#7CFFB2";   // letter being typed
+	public static string FinishedColor = "#7CFFB2";  // finished sentence stays on screen
+	public static string ErrorColor = "#FF6B6B";
 
-	public Slider thresholdSlider; // Reference to the slider controlling the long press threshold
+	public Slider thresholdSlider; // Legacy slider; the HUD clears this and sets the threshold directly.
+
+	// ---- Hooks for the HUD -------------------------------------------------
+	/// <summary>While true, presses are ignored (tutorial demos, start screen).</summary>
+	public bool BlockInput { get; set; }
+	/// <summary>Extra press source, e.g. the on-screen key.</summary>
+	public Func<bool> ExtraPressed;
+	/// <summary>Returns true when a screen position is over a UI control; clicks there are not telegraph presses.</summary>
+	public Func<Vector2, bool> IsOverControl;
+
+	public event Action<char> SymbolEntered;
+	public event Action<string> LetterCommitted;
+
+	public bool IsKeyDown => isKeyDown;
+	/// <summary>Seconds the key has been held, or the last press length after release.</summary>
+	public float PressElapsed => isKeyDown ? Time.unscaledTime - keyDownTime : lastPressDuration;
+	public string CurrentCode => currentMorseCode;
+	public float LetterGap { get => endOfInputDelay; set => endOfInputDelay = value; }
+	// ------------------------------------------------------------------------
 
 	void Update()
 	{
@@ -37,17 +61,34 @@ public class TelegraphSystem : MonoBehaviour
 			longPressThreshold = Mathf.Lerp(0.1f, 0.5f, (thresholdSlider.value - 0.5f) / (3f - 0.5f));
 		}
 
-		if (inputLocked)
+		if (Input.GetKeyDown(KeyCode.Escape) && !inputLocked && !BlockInput)
 		{
+			ClearSentence();
 			return;
 		}
 
-		if (Input.anyKey)
+		bool pressed = ReadPressed();
+
+		if (inputLocked || BlockInput)
+		{
+			CancelPress();
+			needRelease = true;
+			return;
+		}
+
+		// After a block ends, wait until everything is released before accepting a new press.
+		if (needRelease)
+		{
+			if (pressed) return;
+			needRelease = false;
+		}
+
+		if (pressed)
 		{
 			if (!isKeyDown)
 			{
 				isKeyDown = true;
-				keyDownTime = Time.time;
+				keyDownTime = Time.unscaledTime;
 				beepSound.Play();
 
 				// A new key press after a full stop starts a new sentence.
@@ -64,10 +105,12 @@ public class TelegraphSystem : MonoBehaviour
 		{
 			isKeyDown = false;
 			beepSound.Stop();
-			float keyPressDuration = Time.time - keyDownTime;
-			currentMorseCode += keyPressDuration <= longPressThreshold ? "." : "-";
+			lastPressDuration = Time.unscaledTime - keyDownTime;
+			char symbol = lastPressDuration <= longPressThreshold ? '.' : '-';
+			currentMorseCode += symbol;
 
 			UpdateLiveMorseCodeDisplay();
+			SymbolEntered?.Invoke(symbol);
 
 			// Commit the letter once the key has been released for endOfInputDelay.
 			if (!sentenceFinished && !inputLocked)
@@ -77,13 +120,36 @@ public class TelegraphSystem : MonoBehaviour
 		}
 	}
 
+	private bool ReadPressed()
+	{
+		bool mouseHeld = Input.GetMouseButton(0) || Input.GetMouseButton(1) || Input.GetMouseButton(2);
+		if (Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2))
+		{
+			mouseStartedOnControl = IsOverControl != null && IsOverControl(Input.mousePosition);
+		}
+
+		bool mouse = mouseHeld && !mouseStartedOnControl;
+		bool keyboard = Input.anyKey && !mouseHeld && !Input.GetKey(KeyCode.Escape);
+		bool extra = ExtraPressed != null && ExtraPressed();
+		return keyboard || mouse || extra;
+	}
+
+	private void CancelPress()
+	{
+		if (isKeyDown)
+		{
+			isKeyDown = false;
+			beepSound.Stop();
+		}
+	}
+
 	IEnumerator EndOfInputSequence()
 	{
-		yield return new WaitForSeconds(endOfInputDelay);
+		yield return new WaitForSecondsRealtime(endOfInputDelay);
 		DecodeMorseCode();
 
 		// Keep pausing and the word ends: add a space automatically.
-		yield return new WaitForSeconds(wordGapDelay);
+		yield return new WaitForSecondsRealtime(wordGapDelay);
 		endOfInputCoroutine = null;
 		if (!sentenceFinished && decodedString.Length > 0 && !decodedString.EndsWith(" "))
 		{
@@ -130,6 +196,7 @@ public class TelegraphSystem : MonoBehaviour
 		}
 
 		UpdateCollectionText();
+		LetterCommitted?.Invoke(decodedLetter);
 	}
 
 	private void UpdateCollectionText()
@@ -176,8 +243,7 @@ public class TelegraphSystem : MonoBehaviour
 	{
 		StopEndOfInputTimer();
 		inputLocked = true;
-		beepSound.Stop();
-		isKeyDown = false;
+		CancelPress();
 
 		collectionText.text = "ERROR. START OVER";
 		decodedString = "";
@@ -186,10 +252,23 @@ public class TelegraphSystem : MonoBehaviour
 		liveMorseCodeText.text = "";
 		sentenceFinished = false;
 
-		yield return new WaitForSeconds(3f);
+		yield return new WaitForSecondsRealtime(3f);
 
 		collectionText.text = "";
 		inputLocked = false;
+	}
+
+	/// <summary>Clears the sentence and any half-typed letter immediately (Esc).</summary>
+	public void ClearSentence()
+	{
+		StopEndOfInputTimer();
+		CancelPress();
+		decodedString = "";
+		currentMorseCode = "";
+		collectionText.text = "";
+		feedbackText.text = "";
+		liveMorseCodeText.text = "";
+		sentenceFinished = false;
 	}
 
 	// Called when the full stop (.-.-.-) is typed: the finished sentence stays on screen
@@ -215,73 +294,31 @@ public class TelegraphSystem : MonoBehaviour
 		sentenceFinished = false;
 	}
 
+	/// <summary>International Morse code table used for decoding and for the on-screen chart.</summary>
+	public static readonly Dictionary<string, string> Codes = new Dictionary<string, string>
+	{
+		{ ".-", "A" }, { "-...", "B" }, { "-.-.", "C" }, { "-..", "D" }, { ".", "E" },
+		{ "..-.", "F" }, { "--.", "G" }, { "....", "H" }, { "..", "I" }, { ".---", "J" },
+		{ "-.-", "K" }, { ".-..", "L" }, { "--", "M" }, { "-.", "N" }, { "---", "O" },
+		{ ".--.", "P" }, { "--.-", "Q" }, { ".-.", "R" }, { "...", "S" }, { "-", "T" },
+		{ "..-", "U" }, { "...-", "V" }, { ".--", "W" }, { "-..-", "X" }, { "-.--", "Y" },
+		{ "--..", "Z" },
+
+		{ ".----", "1" }, { "..---", "2" }, { "...--", "3" }, { "....-", "4" }, { ".....", "5" },
+		{ "-....", "6" }, { "--...", "7" }, { "---..", "8" }, { "----.", "9" }, { "-----", "0" },
+
+		{ "-.-.--", "!" }, { "..--..", "?" }, { "--..--", "," }, { ".----.", "'" }, { ".-..-.", "\"" },
+		{ "-..-.", "/" }, { "-.--.", "(" }, { "-.--.-", ")" }, { "---...", ":" }, { "-.-.-.", ";" },
+		{ "-...-", "=" }, { ".-.-.", "+" }, { "-....-", "-" }, { "..--.-", "_" }, { ".--.-.", "@" },
+
+		{ ".......", " " },
+		{ "...-.-.-...", "STARTOVER" }, { "........", "STARTOVER" },
+		{ ".-.-.-", "." },
+		{ ".-...", "WAIT" }, { "..-...", "WAIT" },
+	};
+
 	private string MorseCodeToLetter(string morseCode)
 	{
-		switch (morseCode)
-		{
-			case ".-": return "A";
-			case "-...": return "B";
-			case "-.-.": return "C";
-			case "-..": return "D";
-			case ".": return "E";
-			case "..-.": return "F";
-			case "--.": return "G";
-			case "....": return "H";
-			case "..": return "I";
-			case ".---": return "J";
-			case "-.-": return "K";
-			case ".-..": return "L";
-			case "--": return "M";
-			case "-.": return "N";
-			case "---": return "O";
-			case ".--.": return "P";
-			case "--.-": return "Q";
-			case ".-.": return "R";
-			case "...": return "S";
-			case "-": return "T";
-			case "..-": return "U";
-			case "...-": return "V";
-			case ".--": return "W";
-			case "-..-": return "X";
-			case "-.--": return "Y";
-			case "--..": return "Z";
-
-			case ".----": return "1";
-			case "..---": return "2";
-			case "...--": return "3";
-			case "....-": return "4";
-			case ".....": return "5";
-			case "-....": return "6";
-			case "--...": return "7";
-			case "---..": return "8";
-			case "----.": return "9";
-			case "-----": return "0";
-
-			case "-.-.--": return "!";
-			case "..--..": return "?";
-			case "--..--": return ",";
-			case ".----.": return "'";
-			case ".-..-.": return "\"";
-			case "-..-.": return "/";
-			case "-.--.": return "(";
-			case "-.--.-": return ")";
-			case "---...": return ":";
-			case "-.-.-.": return ";";
-			case "-...-": return "=";
-			case ".-.-.": return "+";
-			case "-....-": return "-";
-			case "..--.-": return "_";
-			case ".--.-.": return "@";
-			case ".......": return " ";
-
-			case "...-.-.-...":
-			case "........": return "STARTOVER";
-
-			case ".-.-.-": return ".";
-
-			case ".-...":
-			case "..-...": return "WAIT";
-			default: return "[?]";
-		}
+		return Codes.TryGetValue(morseCode, out string letter) ? letter : "[?]";
 	}
 }
