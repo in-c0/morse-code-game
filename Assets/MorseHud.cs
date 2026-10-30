@@ -68,7 +68,8 @@ public class MorseHud : MonoBehaviour
 	RectTransform captionRow;
 	TextMeshProUGUI caption;
 	Coroutine tutorial;
-	Coroutine demo;
+	Coroutine demo;     // a settings demo (the tutorial runs its demos inline)
+	string savedFeedback;
 	bool sawDot, sawDash, sawLetter;
 
 	class ChartCell
@@ -124,6 +125,8 @@ public class MorseHud : MonoBehaviour
 		{
 			new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
 		}
+		// Every key is the telegraph key: Space/Enter/arrows must never drive a selected HUD control.
+		EventSystem.current.sendNavigationEvents = false;
 
 		var cam = Camera.main;
 		if (cam != null)
@@ -233,6 +236,7 @@ public class MorseHud : MonoBehaviour
 		Place(bg.rectTransform, new Vector2(1, 0.5f), new Vector2(1, 0.5f), new Vector2(1, 0.5f), new Vector2(-rightX, 0), new Vector2(width, 40));
 		var button = bg.gameObject.AddComponent<Button>();
 		button.transition = Selectable.Transition.None; // no extra click animation
+		button.navigation = new Navigation { mode = Navigation.Mode.None };
 		button.targetGraphic = bg;
 		var label = Label("Label", bg.rectTransform, text, 18, TextCol, TextAlignmentOptions.Center);
 		Stretch(label.rectTransform);
@@ -248,6 +252,7 @@ public class MorseHud : MonoBehaviour
 		Place(rt, new Vector2(1, 0.5f), new Vector2(1, 0.5f), new Vector2(1, 0.5f), new Vector2(-rightX, 0), new Vector2(width, 32));
 		var hit = rt.gameObject.AddComponent<Image>();
 		hit.color = new Color(0, 0, 0, 0); // invisible hit area so the whole strip is draggable
+		hit.canvasRenderer.cullTransparentMesh = false;
 
 		var track = Panel("Track", rt, Line);
 		Place(track.rectTransform, new Vector2(0, 0.5f), new Vector2(1, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(0, 4));
@@ -264,6 +269,7 @@ public class MorseHud : MonoBehaviour
 
 		var slider = rt.gameObject.AddComponent<Slider>();
 		slider.transition = Selectable.Transition.None;
+		slider.navigation = new Navigation { mode = Navigation.Mode.None };
 		slider.targetGraphic = handle;
 		slider.fillRect = fill.rectTransform;
 		slider.handleRect = handle.rectTransform;
@@ -296,8 +302,8 @@ public class MorseHud : MonoBehaviour
 		gaugeLine = line.rectTransform;
 		Place(gaugeLine, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(2, 24));
 
-		gaugeLabel = Label("Threshold", gauge, "", 14, Dim, TextAlignmentOptions.Center);
-		Place(gaugeLabel.rectTransform, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(0.5f, 1), new Vector2(0, -16), new Vector2(120, 20));
+		gaugeLabel = Label("Threshold", gaugeLine, "", 14, Dim, TextAlignmentOptions.Center);
+		Place(gaugeLabel.rectTransform, new Vector2(0.5f, 0), new Vector2(0.5f, 0), new Vector2(0.5f, 1), new Vector2(0, -4), new Vector2(120, 20));
 	}
 
 	void BuildChart()
@@ -330,6 +336,8 @@ public class MorseHud : MonoBehaviour
 			chartCells.Add(new ChartCell { code = code, letter = letter, morse = morse });
 		}
 
+		chartPanel.SetSiblingIndex(stage.GetSiblingIndex()); // stage (tutorial caption, Skip) draws above the chart
+
 		SetChartOpen(PlayerPrefs.GetInt(PrefChart, 1) == 1, false);
 	}
 
@@ -344,6 +352,7 @@ public class MorseHud : MonoBehaviour
 		Place(skipBg.rectTransform, new Vector2(0.5f, 0), new Vector2(0.5f, 0), new Vector2(0.5f, 1), new Vector2(0, -8), new Vector2(80, 32));
 		var skip = skipBg.gameObject.AddComponent<Button>();
 		skip.transition = Selectable.Transition.None;
+		skip.navigation = new Navigation { mode = Navigation.Mode.None };
 		skip.targetGraphic = skipBg;
 		var skipLabel = Label("Label", skipBg.rectTransform, "Skip", 16, Dim, TextAlignmentOptions.Center);
 		Stretch(skipLabel.rectTransform);
@@ -372,8 +381,9 @@ public class MorseHud : MonoBehaviour
 		bool pointerHeld = Input.GetMouseButton(0) || Input.touchCount > 0;
 		if (!pointerHeld && tutorial == null && demo == null)
 		{
-			if (dashChanged) { dashChanged = false; demo = StartCoroutine(DemoPress(telegraph.longPressThreshold * 1.6f, "-")); }
-			else if (gapChanged) { gapChanged = false; demo = StartCoroutine(DemoGap()); }
+			if (dashChanged || gapChanged) PlayerPrefs.Save();
+			if (dashChanged) { dashChanged = false; demo = StartCoroutine(SettingsDemo(DemoPress(telegraph.longPressThreshold * 1.6f, "-"))); }
+			else if (gapChanged) { gapChanged = false; demo = StartCoroutine(SettingsDemo(DemoGap())); }
 		}
 	}
 
@@ -430,7 +440,11 @@ public class MorseHud : MonoBehaviour
 		if (portraitApplied.HasValue) ApplyLayout(true);
 		if (chartButtonBg != null) chartButtonBg.color = open ? Line : Surface;
 		if (chartButtonLabel != null) chartButtonLabel.color = open ? Accent : TextCol;
-		if (remember) PlayerPrefs.SetInt(PrefChart, open ? 1 : 0);
+		if (remember)
+		{
+			PlayerPrefs.SetInt(PrefChart, open ? 1 : 0);
+			PlayerPrefs.Save(); // WebGL only writes to IndexedDB on Save()
+		}
 	}
 
 	bool IsOverControl(Vector2 screenPos)
@@ -477,7 +491,9 @@ public class MorseHud : MonoBehaviour
 	void UpdateStartOverlay()
 	{
 		if (startOverlay == null) return;
-		bool pressed = Input.anyKeyDown || (tapKey != null && tapKey.Held);
+		bool tapped = Input.GetMouseButtonDown(0)
+			|| (Input.touchCount > 0 && Input.GetTouch(0).phase == TouchPhase.Began);
+		bool pressed = Input.anyKeyDown || tapped || (tapKey != null && tapKey.Held);
 		if (!pressed) return;
 
 		Destroy(startOverlay.gameObject);
@@ -583,6 +599,7 @@ public class MorseHud : MonoBehaviour
 
 	void StartTutorial()
 	{
+		StopDemo();
 		if (tutorial != null) StopCoroutine(tutorial);
 		tutorial = StartCoroutine(Tutorial());
 	}
@@ -650,7 +667,6 @@ public class MorseHud : MonoBehaviour
 		telegraph.liveMorseCodeText.text = "";
 		demoPress = -1f;
 		telegraph.BlockInput = false;
-		demo = null;
 	}
 
 	/// <summary>A dot, then the letter gap passes and the letter appears.</summary>
@@ -670,12 +686,32 @@ public class MorseHud : MonoBehaviour
 		telegraph.feedbackText.text = "";
 		demoPress = -1f;
 		telegraph.BlockInput = false;
+	}
+
+	/// <summary>Runs a demo after a settings change without wiping what the player had on screen.</summary>
+	IEnumerator SettingsDemo(IEnumerator inner)
+	{
+		savedFeedback = telegraph.feedbackText.text;
+		yield return inner;
+		RestoreTexts();
 		demo = null;
+	}
+
+	void RestoreTexts()
+	{
+		if (savedFeedback == null) return;
+		telegraph.feedbackText.text = savedFeedback;
+		telegraph.liveMorseCodeText.text = telegraph.CurrentCode;
+		savedFeedback = null;
 	}
 
 	void StopDemo()
 	{
-		if (demo != null) StopCoroutine(demo);
+		if (demo != null)
+		{
+			StopCoroutine(demo);
+			RestoreTexts();
+		}
 		demo = null;
 		demoPress = -1f;
 		telegraph.beepSound.Stop();
