@@ -33,6 +33,18 @@ public class MorseHud : MonoBehaviour
 	Canvas canvas;
 	GraphicRaycaster raycaster;
 
+	// Layout (landscape / portrait)
+	CanvasScaler scaler;
+	RectTransform settingsBar, titleRt, helpRt, chartButtonRt;
+	GridLayoutGroup chartGrid;
+	TextMeshProUGUI hint;
+	bool? portraitApplied;
+	Vector2Int lastScreen;
+
+	// Web / touch
+	RectTransform startOverlay;
+	MorseTapKey tapKey;
+
 	// Settings bar
 	Slider dashSlider, gapSlider;
 	TextMeshProUGUI dashLabel, gapLabel;
@@ -87,12 +99,18 @@ public class MorseHud : MonoBehaviour
 		BuildChart();
 		BuildCaption();
 		BuildHint();
+		BuildTapKey();
+		BuildStartOverlay();
 
 		telegraph.IsOverControl = IsOverControl;
 		telegraph.SymbolEntered += s => { if (s == '.') sawDot = true; else sawDash = true; };
 		telegraph.LetterCommitted += _ => sawLetter = true;
 
-		if (PlayerPrefs.GetInt(PrefOnboarded, 0) == 0)
+		ApplyLayout(true);
+
+		// On the web, a first press is needed for focus and audio. Without the start screen,
+		// a first-time player goes straight into the tutorial.
+		if (startOverlay == null && PlayerPrefs.GetInt(PrefOnboarded, 0) == 0)
 		{
 			StartTutorial();
 		}
@@ -119,7 +137,7 @@ public class MorseHud : MonoBehaviour
 		canvas = go.AddComponent<Canvas>();
 		canvas.renderMode = RenderMode.ScreenSpaceOverlay;
 		canvas.sortingOrder = 10;
-		var scaler = go.AddComponent<CanvasScaler>();
+		scaler = go.AddComponent<CanvasScaler>();
 		scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
 		scaler.referenceResolution = new Vector2(1280, 720);
 		scaler.matchWidthOrHeight = 0.5f;
@@ -169,10 +187,11 @@ public class MorseHud : MonoBehaviour
 
 	void BuildSettingsBar()
 	{
-		var bar = Rect("Settings", root);
+		var bar = settingsBar = Rect("Settings", root);
 		Place(bar, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), new Vector2(0, -16), new Vector2(-48, 44));
 
 		var title = Label("Title", bar, "MORSE TYPER", 18, Dim, TextAlignmentOptions.Left);
+		titleRt = title.rectTransform;
 		title.characterSpacing = 12;
 		Place(title.rectTransform, new Vector2(0, 0), new Vector2(0, 1), new Vector2(0, 0.5f), Vector2.zero, new Vector2(260, 0));
 
@@ -185,8 +204,10 @@ public class MorseHud : MonoBehaviour
 		float x = 0;
 		var help = MakeButton(bar, "?", 44, ref x);
 		help.onClick.AddListener(StartTutorial);
+		helpRt = (RectTransform)help.transform;
 		var chart = MakeButton(bar, "Chart", 88, ref x);
 		chartButtonBg = chart.GetComponent<Image>();
+		chartButtonRt = (RectTransform)chart.transform;
 		chartButtonLabel = chart.GetComponentInChildren<TextMeshProUGUI>();
 		chart.onClick.AddListener(() => SetChartOpen(!chartPanel.gameObject.activeSelf, true));
 
@@ -287,7 +308,7 @@ public class MorseHud : MonoBehaviour
 
 		var grid = Rect("Grid", chartPanel);
 		Stretch(grid, 14);
-		var layout = grid.gameObject.AddComponent<GridLayoutGroup>();
+		var layout = chartGrid = grid.gameObject.AddComponent<GridLayoutGroup>();
 		layout.cellSize = new Vector2(84, 40);
 		layout.spacing = new Vector2(4, 4);
 		layout.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
@@ -333,7 +354,7 @@ public class MorseHud : MonoBehaviour
 
 	void BuildHint()
 	{
-		var hint = Label("Hint", root, "tap = dot     hold = dash     pause = letter     .-.-.- = done     Esc = clear", 15, Dim, TextAlignmentOptions.Center);
+		hint = Label("Hint", root, "tap = dot     hold = dash     pause = letter     .-.-.- = done     Esc = clear", 15, Dim, TextAlignmentOptions.Center);
 		Place(hint.rectTransform, new Vector2(0, 0), new Vector2(1, 0), new Vector2(0.5f, 0), new Vector2(0, 18), new Vector2(0, 24));
 	}
 
@@ -341,6 +362,8 @@ public class MorseHud : MonoBehaviour
 
 	void Update()
 	{
+		ApplyLayout(false);
+		UpdateStartOverlay();
 		UpdateSettingsLabels();
 		UpdateGauge();
 		UpdateChartFilter();
@@ -404,7 +427,7 @@ public class MorseHud : MonoBehaviour
 	{
 		chartPanel.gameObject.SetActive(open);
 		chartFilter = null;
-		stage.offsetMax = new Vector2(open ? -(chartPanel.sizeDelta.x + 48) : 0, 0);
+		if (portraitApplied.HasValue) ApplyLayout(true);
 		if (chartButtonBg != null) chartButtonBg.color = open ? Line : Surface;
 		if (chartButtonLabel != null) chartButtonLabel.color = open ? Accent : TextCol;
 		if (remember) PlayerPrefs.SetInt(PrefChart, open ? 1 : 0);
@@ -418,6 +441,142 @@ public class MorseHud : MonoBehaviour
 		var hits = new List<RaycastResult>();
 		raycaster.Raycast(data, hits);
 		return hits.Count > 0;
+	}
+
+	// ---------------------------------------------------------------- web & touch
+
+	void BuildTapKey()
+	{
+		if (!Application.isMobilePlatform && !Input.touchSupported) return;
+
+		var bg = Panel("Tap Key", root, Surface, true);
+		var label = Label("Label", bg.rectTransform, "KEY", 28, TextCol, TextAlignmentOptions.Center);
+		label.characterSpacing = 20;
+		Stretch(label.rectTransform);
+		tapKey = bg.gameObject.AddComponent<MorseTapKey>();
+		telegraph.ExtraPressed = () => tapKey.Held;
+	}
+
+	void BuildStartOverlay()
+	{
+		if (Application.platform != RuntimePlatform.WebGLPlayer) return;
+
+		var bg = Panel("Start", root, WithAlpha(Bg, 0.92f));
+		bg.sprite = null;
+		startOverlay = bg.rectTransform;
+		Stretch(startOverlay);
+		string verb = tapKey != null ? "Tap" : "Press any key";
+		var label = Label("Label", startOverlay, verb + " to start", 32, Accent, TextAlignmentOptions.Center);
+		Stretch(label.rectTransform);
+
+		// First-time players: the start press only opens the tutorial.
+		// Returning players: it's not a raycast target, so the same press is the first dot.
+		telegraph.BlockInput = PlayerPrefs.GetInt(PrefOnboarded, 0) == 0;
+	}
+
+	void UpdateStartOverlay()
+	{
+		if (startOverlay == null) return;
+		bool pressed = Input.anyKeyDown || (tapKey != null && tapKey.Held);
+		if (!pressed) return;
+
+		Destroy(startOverlay.gameObject);
+		startOverlay = null;
+		if (PlayerPrefs.GetInt(PrefOnboarded, 0) == 0)
+		{
+			StartTutorial();
+		}
+		else
+		{
+			telegraph.BlockInput = false;
+		}
+	}
+
+	/// <summary>Landscape: settings in one row, chart on the right.
+	/// Portrait: settings in two rows, chart as a bottom sheet, on-screen key at the bottom.</summary>
+	void ApplyLayout(bool force)
+	{
+		var screen = new Vector2Int(Screen.width, Screen.height);
+		if (!force && screen == lastScreen) return;
+		lastScreen = screen;
+		bool portrait = Screen.height > Screen.width;
+		portraitApplied = portrait;
+
+		bool chartOpen = chartPanel.gameObject.activeSelf;
+		float keyArea = 0;
+
+		if (portrait)
+		{
+			scaler.referenceResolution = new Vector2(720, 1280);
+			scaler.matchWidthOrHeight = 0f;
+
+			Place(settingsBar, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), new Vector2(0, -16), new Vector2(-48, 96));
+			Place(titleRt, new Vector2(0, 1), new Vector2(0, 1), new Vector2(0, 1), Vector2.zero, new Vector2(260, 40));
+			Place(helpRt, new Vector2(1, 1), new Vector2(1, 1), new Vector2(1, 1), Vector2.zero, new Vector2(44, 40));
+			Place(chartButtonRt, new Vector2(1, 1), new Vector2(1, 1), new Vector2(1, 1), new Vector2(-56, 0), new Vector2(88, 40));
+			// Second row, left to right: label, slider, label, slider.
+			PlaceRow2(dashLabel.rectTransform, 0, 150, TextAlignmentOptions.Left);
+			PlaceRow2((RectTransform)dashSlider.transform, 156, 150, TextAlignmentOptions.Left);
+			PlaceRow2(gapLabel.rectTransform, 336, 150, TextAlignmentOptions.Left);
+			PlaceRow2((RectTransform)gapSlider.transform, 492, 150, TextAlignmentOptions.Left);
+
+			if (tapKey != null)
+			{
+				Place((RectTransform)tapKey.transform, new Vector2(0, 0), new Vector2(1, 0), new Vector2(0.5f, 0), new Vector2(0, 56), new Vector2(-48, 140));
+				keyArea = 56 + 140;
+			}
+
+			Place(chartPanel, new Vector2(0, 0), new Vector2(1, 0), new Vector2(0.5f, 0), new Vector2(0, keyArea + 16), new Vector2(-48, 300));
+			chartGrid.cellSize = new Vector2(104, 40);
+			chartGrid.constraintCount = 6;
+
+			stage.offsetMin = new Vector2(0, keyArea + (chartOpen ? 316 : 0));
+			stage.offsetMax = new Vector2(0, -112);
+			hint.gameObject.SetActive(false); // the tutorial and chart cover it on small screens
+		}
+		else
+		{
+			scaler.referenceResolution = new Vector2(1280, 720);
+			scaler.matchWidthOrHeight = 0.5f;
+
+			Place(settingsBar, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), new Vector2(0, -16), new Vector2(-48, 44));
+			Place(titleRt, new Vector2(0, 0), new Vector2(0, 1), new Vector2(0, 0.5f), Vector2.zero, new Vector2(260, 0));
+			// Right-aligned row, right to left (same order as BuildSettingsBar).
+			PlaceRow1(helpRt, 0, 44);
+			PlaceRow1(chartButtonRt, 56, 88);
+			PlaceRow1((RectTransform)gapSlider.transform, 156, 150);
+			PlaceRow1(gapLabel.rectTransform, 314, 150);
+			PlaceRow1((RectTransform)dashSlider.transform, 484, 150);
+			PlaceRow1(dashLabel.rectTransform, 642, 150);
+			dashLabel.alignment = TextAlignmentOptions.Right;
+			gapLabel.alignment = TextAlignmentOptions.Right;
+
+			if (tapKey != null)
+			{
+				Place((RectTransform)tapKey.transform, new Vector2(0.5f, 0), new Vector2(0.5f, 0), new Vector2(0.5f, 0), new Vector2(0, 48), new Vector2(320, 96));
+				keyArea = 48 + 96;
+			}
+
+			Place(chartPanel, new Vector2(1, 0.5f), new Vector2(1, 0.5f), new Vector2(1, 0.5f), new Vector2(-24, -10), new Vector2(288, 560));
+			chartGrid.cellSize = new Vector2(84, 40);
+			chartGrid.constraintCount = 3;
+
+			stage.offsetMin = new Vector2(0, keyArea);
+			stage.offsetMax = new Vector2(chartOpen ? -(288 + 48) : 0, 0);
+			hint.gameObject.SetActive(tapKey == null);
+		}
+	}
+
+	void PlaceRow1(RectTransform rt, float rightOffset, float width)
+	{
+		Place(rt, new Vector2(1, 0.5f), new Vector2(1, 0.5f), new Vector2(1, 0.5f), new Vector2(-rightOffset, 0), new Vector2(width, rt.sizeDelta.y));
+	}
+
+	void PlaceRow2(RectTransform rt, float leftOffset, float width, TextAlignmentOptions align)
+	{
+		Place(rt, new Vector2(0, 0), new Vector2(0, 0), new Vector2(0, 0), new Vector2(leftOffset, 4), new Vector2(width, 32));
+		var text = rt.GetComponent<TextMeshProUGUI>();
+		if (text != null) text.alignment = align;
 	}
 
 	// ---------------------------------------------------------------- tutorial
