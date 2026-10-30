@@ -33,10 +33,18 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HAS_LICENSE: ${{ secrets.UNITY_LICENSE != '' }}
+      WANTS_DEPLOY: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy }}
+    outputs:
+      built: ${{ steps.upload.outcome == 'success' }}
     steps:
       - name: Check Unity license secret
         if: env.HAS_LICENSE != 'true'
-        run: echo "::warning::UNITY_LICENSE secret is not set — skipping WebGL build."
+        run: |
+          if [ "$WANTS_DEPLOY" = "true" ]; then
+            echo "::error::UNITY_LICENSE secret is not set, so there is no build to deploy. Add UNITY_LICENSE, UNITY_EMAIL and UNITY_PASSWORD under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "::warning::UNITY_LICENSE secret is not set — skipping WebGL build."
 
       - uses: actions/checkout@v4
         if: env.HAS_LICENSE == 'true'
@@ -62,13 +70,14 @@ jobs:
 
       # Pages serves the folder that contains index.html.
       - uses: actions/upload-pages-artifact@v3
+        id: upload
         if: env.HAS_LICENSE == 'true'
         with:
           path: build/WebGL/morse-code-typer
 
   deploy:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main' && needs.build.outputs.built == 'true'
     runs-on: ubuntu-latest
     permissions:
       pages: write
